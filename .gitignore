@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+myenv/
+.env
+
+# Pipeline data files (generated, not source)
+inspire_records_cache.json
+inspire_ror.db
+*.csv
+*.xls
+*.xlsx
+
+# Backups and temp files
+*.bak
+~$*
+.DS_Store
+
+# Debug/scratch scripts
+debug_one_record.py
+test_pipeline.py
