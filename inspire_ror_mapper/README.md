@@ -200,7 +200,7 @@ from inspire_ror_mapper import AUTO_ACCEPT_THRESHOLD, REVIEW_THRESHOLD, WEIGHTS
 from inspire_ror_mapper import fetch_inspire_records, parse_inspire_record
 
 # Fetch all Indian institutions from INSPIRE (paginated automatically)
-records = fetch_inspire_records(country_code="IN", max_records=None)
+records = fetch_inspire_records(country_code=COUNTRY_CODE, max_records=None)
 
 # Parse one raw metadata dict into a clean typed dict
 parsed = parse_inspire_record(records[0])
@@ -217,7 +217,7 @@ from inspire_ror_mapper import map_records, flag_duplicates
 
 df = map_records(
     all_records,
-    country_filter="IN",
+    country_filter=COUNTRY_CODE,
     auto_accept_threshold=0.87,
     review_threshold=0.50,
     query_delay=1.6,

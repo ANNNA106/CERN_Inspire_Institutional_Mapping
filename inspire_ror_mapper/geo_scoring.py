@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import radians, sin, cos, sqrt, atan2
 from functools import lru_cache
 import pgeocode
+from .constants import COUNTRY_CODE
 
 
 class GeoScorer:
@@ -96,7 +97,7 @@ class GeoScorer:
         # Uses pgeocode to find the city centroid, then haversine vs ROR.
         # This avoids all string-matching alias problems (Bombay/Mumbai etc).
         inspire_city    = (inspire.get("city") or "").strip()
-        inspire_country = (inspire.get("country_code") or "IN")
+        inspire_country = (inspire.get("country_code") or COUNTRY_CODE)
 
         if inspire_city:
             centroid = self._city_centroid(inspire_city, inspire_country)

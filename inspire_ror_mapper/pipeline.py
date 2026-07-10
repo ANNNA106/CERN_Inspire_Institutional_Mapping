@@ -30,7 +30,7 @@ import time
 
 import pandas as pd
 
-from .constants import AUTO_ACCEPT_THRESHOLD, REVIEW_THRESHOLD, ROR_QUERY_DELAY
+from .constants import AUTO_ACCEPT_THRESHOLD, REVIEW_THRESHOLD, ROR_QUERY_DELAY, COUNTRY_CODE
 from .http_utils import make_session, RateLimitExhausted
 from .inspire_client import parse_inspire_record
 from .ror_queries import get_ror_candidates
@@ -54,7 +54,7 @@ def _no_match_row(inspire: dict) -> dict:
 
 def map_records(
     all_records: list[dict],
-    country_filter: str = "IN",
+    country_filter: str = COUNTRY_CODE,
     auto_accept_threshold: float = AUTO_ACCEPT_THRESHOLD,
     review_threshold: float = REVIEW_THRESHOLD,
     query_delay: float = ROR_QUERY_DELAY,

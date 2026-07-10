@@ -24,7 +24,7 @@ import time
 
 import requests
 
-from .constants import ROR_AFFIL_API, ROR_QUERY_DELAY
+from .constants import ROR_AFFIL_API, ROR_QUERY_DELAY, COUNTRY_CODE
 from .http_utils import get_with_retry, extract_domain, RateLimitExhausted
 from .inspire_client import normalize_name
 
@@ -102,7 +102,7 @@ def _parse_ror_item(item: dict) -> dict:
 def get_ror_candidates(
     inspire: dict,
     session: requests.Session,
-    country_filter: str = "IN",
+    country_filter: str = COUNTRY_CODE,
     query_delay: float = ROR_QUERY_DELAY,
 ) -> list[dict]:
     """
@@ -234,19 +234,6 @@ def get_ror_candidates(
         candidates.extend(batch)
 
     # A1b: modern ICN field + city + country.
-    #
-    # "ICN" (current canonical name) is a separate field from "legacy_ICN"
-    # (older, often heavily abbreviated/truncated short form) and is
-    # frequently a much fuller name. E.g. control_number 906174:
-    #   legacy_ICN = "Bangalore, Nehru Ctr."          (place-leading, institute
-    #                                                   segment truncated to 2 words)
-    #   ICN        = "Jawaharlal Nehru Ctr for Advanced Sci. Res."
-    #                                                  (full name, correct order)
-    # Querying ICN in addition to legacy_ICN gives a second, independent
-    # shot at a usable name string whenever legacy_ICN is too mangled or
-    # truncated for the affiliation matcher to work with — this costs one
-    # extra API call but only when ICN is present and differs from
-    # legacy_ICN, so it's cheap relative to the recall it can recover.
     icn_modern = (inspire.get("ICN") or "").strip()
     if icn_modern and icn_modern.lower() != icn_raw.lower():
         batch = _affil(_build_affil_string(normalize_name(icn_modern)))
@@ -275,7 +262,7 @@ def get_ror_candidates(
     # a website — both BHEL (ror.org/03ky3pc21) and JNCASR
     # (ror.org/0538gdx71) have "domains": [] despite having real websites
     # under `links`. A2's query.advanced=domains:X search legitimately
-    # returns zero results in that case — it isn't a bug in our query, the
+    # returns zero results in that case — it isn't a bug in our query, th e
     # ROR field itself is empty.
     #
     # The affiliation endpoint's NLP matcher generally still recognizes a
@@ -396,5 +383,58 @@ def get_ror_candidates(
         for c in batch:
             c["_query_source"] = f"A7:postal_name({q7})"
         candidates.extend(batch)
+
+    # A8: structured external identifier lookup (GRID / Wikidata / ISNI).
+    #
+    # Fires when INSPIRE carries a GRID, Wikidata, or ISNI identifier that
+    # ROR also indexes in its external_ids field. Uses query.advanced for
+    # an exact structured-field match — no NLP, no fuzzy ranking, no
+    # dilution from state/city context in the query string.
+    #
+    # This is qualitatively different from all previous tiers: it doesn't
+    # rely on the institution's name or domain at all, just on a shared
+    # numerical/alphanumerical identifier. A GRID or Wikidata match is
+    # deterministic — the same organisation will carry the same identifier
+    # in both databases — making this the most reliable retrieval path
+    # available when the identifier exists.
+    #
+    # Why not do this earlier (before A1)?
+    # A8 fires unconditionally regardless of whether earlier tiers found a
+    # chosen result, because an identifier-sourced candidate should always
+    # be in the pool for scoring even when A1–A7 already found something.
+    # We place it last only to avoid unnecessary API calls when the record
+    # is already well-matched by earlier tiers; the scoring layer will
+    # correctly rank an A8 identifier-match candidate above others if its
+    # ext_id signal fires.
+    #
+    # Real-world example that motivated this tier:
+    #   CN 911897 "RKMVU, West Bengal" has GRID=grid.440708.f.
+    #   ROR ror.org/03kp2qt98 also has GRID=grid.440708.f.
+    #   RKMVU is NOT the ROR acronym (which is RKMVERI), so A5/A6 miss.
+    #   postal_name_candidate is empty (initialism RKMVU uses sub-word K).
+    #   Without A8, this record never enters the candidate list at all.
+    #
+    # ROR field paths (confirmed from ROR v2 API schema):
+    #   GRID:     external_ids.all (type=grid, values like "grid.440708.f")
+    #   Wikidata: external_ids.all (type=wikidata, values like "Q7288821")
+    #   ISNI:     external_ids.all (type=isni, values like "0000 0004 0507 0817")
+    _EXT_ID_SCHEMAS = {
+        "GRID":     ("grid",     lambda v: v),
+        "WIKIDATA": ("wikidata", lambda v: v),
+        "ISNI":     ("isni",     lambda v: v),
+    }
+    for schema, (ror_type, normalise) in _EXT_ID_SCHEMAS.items():
+        values = inspire.get("ext_ids", {}).get(schema, [])
+        for raw_val in values[:1]:   # try at most one value per schema
+            val = normalise(raw_val.strip())
+            if not val:
+                continue
+            batch = _ror_search(
+                {"query.advanced": f"external_ids.all:{val}"},
+                has_affil_score=False,
+            )
+            for c in batch:
+                c["_query_source"] = f"A8:{schema}({val})"
+            candidates.extend(batch)
 
     return candidates

@@ -15,6 +15,7 @@ from .http_utils import make_session
 from .inspire_client import parse_inspire_record
 from .ror_queries import get_ror_candidates
 from .scoring import score_candidate
+from .constants import COUNTRY_CODE
 
 log = logging.getLogger(__name__)
 
@@ -267,7 +268,7 @@ def export_duplicate_groups(
 def debug_candidates(
     control_number: int,
     records_cache: str = "inspire_records_cache.json",
-    country_filter: str = "IN",
+    country_filter: str = COUNTRY_CODE,
     query_delay: float = 1.6,
 ) -> None:
     """

@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from .constants import INSPIRE_API, INSPIRE_FIELDS, INDIAN_STATES, CITY_ALIASES
+from .constants import INSPIRE_API, INSPIRE_FIELDS, INDIAN_STATES, CITY_ALIASES, COUNTRY_CODE
 from .http_utils import make_session, get_with_retry, extract_domain
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,9 @@ def normalize_name(name: str) -> str:
         r"\bAstron\.?\b": "Astronomy",
         r"\bDept\.?\b":   "Department",
         r"\bEng\.?\b":    "Engineering",
+        r"\bEngg\.?\b":   "Engineering",    # "Engg." is common in Indian institution names
+        r"\bInformat\.?\b": "Information",  # "Informat." abbreviated form
+        r"\bInfo\.?\b":   "Information",
         r"\bEngin\.?\b":  "Engineering",
         r"\bNatl\.?\b":   "National",
         r"\bGovt\.?\b":   "Government",
@@ -62,20 +65,34 @@ def normalize_name(name: str) -> str:
         r"\bRes\.?\b":    "Research",
         r"\bSci\.?\b":    "Science",
         r"\bOrg\.?\b":    "Organization",
-        
+        r"\bAgric\.?\b":  "Agriculture",
+        r"\bAgr\.?\b":    "Agriculture",
+        # State rename: "Orissa" was renamed to "Odisha" in 2011. INSPIRE
+        # legacy_ICN data uses the old name; ROR consistently uses "Odisha"
+        # in institution names. Normalising the INSPIRE side to "Odisha"
+        # before fuzzy comparison prevents a 2011 state rename from blocking
+        # name matching.
+        #
+        # NOTE: City renames (Bombay→Mumbai, Calcutta→Kolkata, Madras→Chennai
+        # etc.) are intentionally NOT applied here. ROR uses BOTH old and new
+        # city names in institution labels (e.g. "University of Calcutta",
+        # "IIT Bombay"), so normalising the INSPIRE side alone would create
+        # new mismatches rather than resolving them. City aliases are handled
+        # separately in CITY_ALIASES for the city-match/city-veto logic only.
+        r"\bOrissa\b":    "Odisha",
     }
 
     for pattern, repl in replacements.items():
         name = re.sub(pattern, repl, name, flags=re.IGNORECASE)
 
-    name = re.sub(r"[.,]", " ", name)
+    name = re.sub(r"[.,&]", " ", name)   # & appears in some ROR institution names
     name = " ".join(name.split())
 
     return name
 
 
 def fetch_inspire_records(
-    country_code: str = "IN",
+    country_code: str = COUNTRY_CODE,
     page_size: int = 25,
     max_records: int | None = None,
     session: requests.Session | None = None,
@@ -262,7 +279,41 @@ def parse_inspire_record(meta: dict) -> dict:
                     initials = "".join(w[0] for w in line_words[: len(icn_lead_token)]).upper()
                     initialism_match = initials == icn_lead_token.upper()
 
-            if substring_match or initialism_match:
+            # (c) structural match: the postal first line looks like an
+            # institution name on its own, regardless of any token overlap
+            # with legacy_ICN. Used as a fallback for RENAMED institutions
+            # where legacy_ICN carries the old name and the postal address
+            # carries the current name — with zero shared tokens between
+            # them (e.g. "Kalpakkam Reactor Res. Ctr." vs the postal line
+            # "Indira Gandhi Center for Atomic Res." for IGCAR, which was
+            # renamed from the Kalpakkam Reactor Research Centre).
+            #
+            # Conservative criteria to avoid false-positiving on address
+            # fragments (street names, city+postcode lines, continuation
+            # lines like "and Technology (SLIET)"):
+            #   - ≥ 20 chars (excludes most address fragments)
+            #   - Starts with a capital letter
+            #   - No digits (excludes city+postcode lines like "Tamil Nadu 603 102")
+            #   - ≥ 3 words of 4+ chars (excludes "Dept. of Physics",
+            #     "Near RLY Station")
+            #   - ≥ 70% alphabetic content (excludes "Block C-4, Sector 14")
+            #   - First word is not a common address keyword (Road, Street, etc.)
+            _street_words = {"road", "street", "block", "plot", "phase",
+                             "sector", "near", "opp", "opposite", "behind",
+                             "flat", "house", "village", "town", "district",
+                             "pin", "po", "p.o"}
+            _first_word = re.findall(r"[A-Za-z]+", first_line)
+            structural_match = (
+                len(first_line) >= 20
+                and first_line[0].isupper()
+                and not re.search(r"\d", first_line)
+                and len(re.findall(r"[A-Za-z]{4,}", first_line)) >= 3
+                and (sum(c.isalpha() for c in first_line) /
+                     max(sum(not c.isspace() for c in first_line), 1)) >= 0.70
+                and not (_first_word and _first_word[0].lower() in _street_words)
+            )
+
+            if substring_match or initialism_match or structural_match:
                 postal_name_candidate = first_line
 
     raw_addresses = [

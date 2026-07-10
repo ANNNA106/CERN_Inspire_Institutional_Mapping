@@ -21,9 +21,9 @@ from rapidfuzz import fuzz
 
 from .constants import (
     WEIGHTS, CITY_ALIASES, INDIAN_STATES, GENERIC_NAMES,
-    AUTO_ACCEPT_THRESHOLD, REVIEW_THRESHOLD, GAP_THRESHOLD,
+    AUTO_ACCEPT_THRESHOLD, REVIEW_THRESHOLD, GAP_THRESHOLD, COUNTRY_CODE,
 )
-from .http_utils import domain_overlap
+from .http_utils import domain_overlap, domain_root_match
 from .inspire_client import normalize_name
 
 # geo_scoring.py lives alongside this package (NOT inside it) — it's an
@@ -57,7 +57,7 @@ class ScoringResult(NamedTuple):
 def score_candidate(
     inspire: dict,
     ror: dict,
-    expected_country: str = "IN",
+    expected_country: str = COUNTRY_CODE,
 ) -> ScoringResult:
     """
     Score one (INSPIRE record, ROR candidate) pair.
@@ -104,6 +104,31 @@ def score_candidate(
             + [inspire.get("postal_name_candidate", "")]
         ) if n
     ]
+
+    # Also include postal_towns lines that look like institution names.
+    #
+    # postal_towns holds all non-trivial postal_address lines (first 4 lines,
+    # minus country/state/city tokens). For many records the institution's
+    # full official name, or the name of its parent institution, appears in
+    # the postal address — e.g. for SGTB Khalsa College, postal_address[1]
+    # is "University of Delhi", which is the parent institution whose ROR id
+    # INSPIRE may have stored on this record. Including these lines lets the
+    # name signal correctly evaluate whether the fetched ROR record's name
+    # matches *any* level of the address — both the institution itself and
+    # any parent institution referenced there.
+    #
+    # Guard: only lines longer than 10 chars (excludes "INDIA", "110007",
+    # "Delhi - 110007" type fragments) and not already in inspire_names.
+    _existing_names_lower = {n.lower() for n in inspire_names}
+    for town in inspire.get("postal_towns", []):
+        if (
+            len(town) > 10
+            and town.lower() not in _existing_names_lower
+            and not re.match(r"^\d", town)          # skip lines starting with digit (postal codes)
+            and re.search(r"[A-Za-z]{4,}", town)    # must have at least one real word
+        ):
+            inspire_names.append(town)
+            _existing_names_lower.add(town.lower())
 
     best_name = 0.0
     inspire_city = (inspire.get("city") or "").strip()
@@ -210,6 +235,8 @@ def score_candidate(
                 if idomain == rdomain:
                     domain_score = 1.0
                     break
+                if domain_root_match(idomain, rdomain):
+                    domain_score = max(domain_score, 0.7)
                 if domain_overlap(idomain, rdomain):
                     domain_score = max(domain_score, 0.5)
             if domain_score == 1.0:
@@ -312,10 +339,24 @@ def score_candidate(
         return any(fuzz.ratio(city.lower(), tok.lower()) >= 90 for tok in tokens)
 
     _postal_towns = inspire.get("postal_towns", [])
+
+    # For city detection, we also check the raw unfiltered postal address lines.
+    # postal_towns excludes lines with digits (to prevent postcode fragments from
+    # being used as name candidates in inspire_names), but those lines still
+    # contain valid city information — e.g. "Delhi 110006" clearly places the
+    # institution in Delhi. _city_in_text extracts alphabetic tokens only, so
+    # it can find "Delhi" inside "Delhi 110006" even if the full line was filtered.
+    # We store the raw postal lines in parse_inspire_record as "postal_lines_raw"
+    # specifically for this purpose.
+    _all_postal_for_city = list(_postal_towns) + [
+        ln for ln in inspire.get("postal_lines_raw", [])
+        if ln not in _postal_towns
+    ]
+
     _ror_city_in_postal = bool(ror_city) and any(
         fuzz.token_sort_ratio(ror_city.lower(), t.lower()) >= 85
         or _city_in_text(ror_city, t)
-        for t in _postal_towns
+        for t in _all_postal_for_city
     )
     _city_confirmed = city_match_score >= 0.85 or _ror_city_in_postal
 
@@ -443,6 +484,59 @@ def score_candidate(
             and len(inspire.get("acronym", "")) >= 4  # avoid boosting short/ambiguous acronyms like "IIT"
         ):
             confidence = max(confidence, 0.92)
+
+        # Acronym + name_fuzzy + domain_root_match boost.
+        #
+        # Handles the A6-sourced-candidate pattern: a record found via exact
+        # structured-name lookup (A6: query.advanced=names.value:"ACRONYM")
+        # has _affil_score=0.0 by construction — the affiliation endpoint was
+        # never called for it. This means the affil_chosen+name boost can
+        # never fire, and the standard evidence formula gives low confidence
+        # even when three independent signals strongly agree.
+        #
+        # The combination of (a) a unique acronym ≥4 chars matching exactly,
+        # (b) the institution's full name matching at fuzzy level, and
+        # (c) a domain root match (same root label across different TLDs,
+        # e.g. sliet.org vs sliet.ac.in) is collectively very strong evidence
+        # for a correct match — comparable to affil_chosen+name on a
+        # full-name record. Fire if all three are present and the acronym is
+        # long enough to be meaningfully unique (≥4 chars excludes IIT, NIT).
+        if (
+            country_ok
+            and acr_score == 1.0
+            and name_score >= 0.75
+            and domain_score >= 0.7     # domain_root_match scores 0.7
+            and len(inspire.get("acronym", "")) >= 4
+            and inspire["official_name"].lower() not in GENERIC_NAMES
+        ):
+            confidence = max(confidence, 0.88)
+            signals_fired.append("acronym_name_domain_boost")
+
+        # Acronym + name_exact + city_confirmed boost.
+        #
+        # Same intent as the acronym_name_domain_boost above, but substitutes
+        # city confirmation for domain match. Handles A6-sourced candidates
+        # where the INSPIRE domain and ROR domain have different root labels
+        # (e.g. jntu.ac.in vs jntuh.ac.in for JNTU Hyderabad — the Hyderabad
+        # campus uses "jntuh" while the legacy INSPIRE record has "jntu") so
+        # domain_root_match fails, but name_exact + acronym + city together
+        # provide equivalent certainty: there is only one institution with
+        # this exact acronym, this full name, AND this city.
+        #
+        # Stricter name threshold (>=0.90, i.e. name_exact) than the domain
+        # variant (>=0.75) because city is a weaker discriminator than domain
+        # — we need the name match to be near-exact before city can substitute.
+        # Also requires acronym ≥4 chars and non-generic name, same as above.
+        if (
+            country_ok
+            and acr_score == 1.0
+            and name_score >= 0.90           # must be name_exact, not just name_fuzzy
+            and _city_confirmed              # city_match OR ror_city in postal_towns
+            and len(inspire.get("acronym", "")) >= 4
+            and inspire["official_name"].lower() not in GENERIC_NAMES
+        ):
+            confidence = max(confidence, 0.88)
+            signals_fired.append("acronym_name_city_boost")
 
         if domain_score >= 0.5 and name_score >= 0.90 and city_match_score >= 0.50:
             confidence = max(confidence, 0.88)

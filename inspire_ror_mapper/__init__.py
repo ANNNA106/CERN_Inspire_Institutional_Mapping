@@ -20,7 +20,7 @@ Stage 2 – Multi-signal re-scoring
 
 Why NOT ?query= + country filter
 ---------------------------------
-The previous implementation used ?query= with a country filter. This failed
+We used ?query= with a country filter. This failed
 in two separate ways:
   1. For generic names ("Indian Institute of Technology"), ?query= returns
      20 Indian institutions with the same words, all scoring ~0.9 on
@@ -34,8 +34,6 @@ token overlap, and does not require an explicit country filter.
 
 Package layout
 ---------------
-This used to be one ~2000-line file. It's now split by responsibility:
-
   constants.py        thresholds, weights, reference data (states/cities/etc)
   http_utils.py        session/retry/domain-extraction helpers (no INSPIRE
                        or ROR-specific knowledge)

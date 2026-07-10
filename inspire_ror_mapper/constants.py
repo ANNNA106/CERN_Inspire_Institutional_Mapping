@@ -1,28 +1,19 @@
 """
 Module-level constants for the INSPIRE → ROR mapping pipeline.
-
-Nothing in this file calls the network or touches a DataFrame — it exists
-so every other module (and any notebook/script) can import thresholds and
-reference data without pulling in requests/pandas-heavy code.
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# ROR API
-# ---------------------------------------------------------------------------
 
+# ROR API
 ROR_AFFIL_API = "https://api.ror.org/v2/organizations"   # ?affiliation=
 
 # Seconds between individual ROR API calls (40 req/min limit → 1.6 s/call safe)
-ROR_QUERY_DELAY = 1.6
+ROR_QUERY_DELAY = 0.2
 
 
-# ---------------------------------------------------------------------------
 # INSPIRE API
-# ---------------------------------------------------------------------------
-
-INSPIRE_API = "https://inspirebeta.net/api/institutions"
+INSPIRE_API = "https://inspirehep.net/api/institutions"
 
 INSPIRE_FIELDS = ",".join([
     "control_number", "legacy_ICN", "ICN",
@@ -31,11 +22,9 @@ INSPIRE_FIELDS = ",".join([
     "external_system_identifiers", "ror",
 ])
 
+COUNTRY_CODE = "IN"   
 
-# ---------------------------------------------------------------------------
 # Scoring weights
-# ---------------------------------------------------------------------------
-
 WEIGHTS = {
     "name":        0.25,
     "affiliation": 0.25,
@@ -104,7 +93,7 @@ INDIAN_STATES = {
     "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh",
     "goa", "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka",
     "kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya", "mizoram",
-    "nagaland", "odisha", "punjab", "rajasthan", "sikkim", "tamil nadu",
+    "nagaland", "odisha", "orissa", "punjab", "rajasthan", "sikkim", "tamil nadu",
     "telangana", "tripura", "uttar pradesh", "uttarakhand", "west bengal",
     "delhi", "jammu and kashmir", "ladakh",
 }
@@ -146,6 +135,7 @@ CITY_ALIASES: dict[str, str] = {
     "hubballi":     "hubballi",
     "shimla":       "simla",
     "simla":        "shimla",
+    "barasat":      "kolkata",
     "baranagar":    "kolkata",
     "barrackpore":  "kolkata",
     "dum dum":      "kolkata",
@@ -155,4 +145,7 @@ CITY_ALIASES: dict[str, str] = {
     "behala":       "kolkata",
     "garia":        "kolkata",
     "kalol":        "ahmedabad",
+    # Campus towns that ROR geocodes to a nearby district/district HQ
+    "longowal":     "sangrur",       # SLIET campus in Longowal, Sangrur district
+    "bhat":         "gandhinagar",   # IPR campus in Bhat township, Gandhinagar district
 }

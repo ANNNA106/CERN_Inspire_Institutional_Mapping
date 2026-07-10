@@ -25,8 +25,8 @@ COUNTRY_CODE          = "IN"
 MAX_RECORDS           = None
 AUTO_ACCEPT_THRESHOLD = 0.85
 REVIEW_THRESHOLD      = 0.50
-ROR_API_DELAY         = 0.12
-PIPELINE_VERSION      = "2.0"   # bump this whenever you change scoring logic
+ROR_API_DELAY         = 0.2
+PIPELINE_VERSION      = "2.0"  
 
 OUTPUT_ALL        = "inspire_ror_all.csv"
 OUTPUT_REVIEW     = "review_queue.csv"
@@ -78,6 +78,7 @@ def main() -> None:
     init_db()
 
     all_records = load_or_fetch_records()
+    print_inspire_record(908148)
 
     # Parse once, reuse for both DB identity upsert and mapping
     parsed = [parse_inspire_record(r) for r in all_records]
@@ -95,7 +96,7 @@ def main() -> None:
     df = flag_duplicates(df)
     print_summary(df)
 
-    # CSV outputs (unchanged — useful for spreadsheet review)
+    # CSV outputs 
     df.to_csv(OUTPUT_ALL, index=False)
     print(f"Full results         -> {OUTPUT_ALL}  ({len(df)} rows)")
 
@@ -132,6 +133,8 @@ def main() -> None:
         fetch_paper_counts(review_cns)
 
     get_summary()
+
+    debug_candidates(908148)
 
 
 if __name__ == "__main__":
